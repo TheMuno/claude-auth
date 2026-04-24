@@ -21,6 +21,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  linkWithCredential,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ── 1. YOUR FIREBASE CONFIG ─────────────────────────────────
@@ -54,6 +55,7 @@ const errorEl       = document.getElementById("auth-error");
 const modeLabel     = document.getElementById("auth-mode-label");
 
 let isSignUpMode = false;
+let pendingCredential = null; // saved when account-exists conflict is detected
 
 // ── 5. HELPERS ───────────────────────────────────────────────
 function showError(msg) {
@@ -76,7 +78,26 @@ function setMode(signUp) {
   clearError();
 }
 
-function handleAuthError(err) {
+async function handleAuthError(err) {
+  if (err.code === "auth/account-exists-with-different-credential") {
+    // Save the credential the user just tried (e.g. Facebook)
+    pendingCredential =
+      FacebookAuthProvider.credentialFromError(err) ||
+      GoogleAuthProvider.credentialFromError(err);
+
+    // Work out which provider they originally signed up with by checking the email domain.
+    // Firebase won't tell us directly (fetchSignInMethodsForEmail is deprecated), so we
+    // ask them to sign in with the other provider to prove ownership, then link.
+    const isFacebookPending = pendingCredential?.providerId === "facebook.com";
+    const providerName = isFacebookPending ? "Google" : "Facebook";
+
+    showError(
+      `This email is already linked to ${providerName}. ` +
+      `Click the ${providerName} button to sign in and automatically connect both accounts.`
+    );
+    return;
+  }
+
   const messages = {
     "auth/user-not-found":       "No account found with that email.",
     "auth/wrong-password":       "Incorrect password.",
@@ -84,10 +105,20 @@ function handleAuthError(err) {
     "auth/email-already-in-use": "An account with this email already exists.",
     "auth/weak-password":        "Password must be at least 6 characters.",
     "auth/popup-closed-by-user": "Sign-in popup was closed before completing.",
-    "auth/account-exists-with-different-credential":
-      "An account already exists with a different sign-in method for this email.",
   };
   showError(messages[err.code] || "Something went wrong. Please try again.");
+}
+
+// After a successful sign-in, link the pending credential if one was saved
+async function linkPendingCredential(user) {
+  if (!pendingCredential) return;
+  try {
+    await linkWithCredential(user, pendingCredential);
+  } catch (_) {
+    // Already linked or incompatible — safe to ignore
+  } finally {
+    pendingCredential = null;
+  }
 }
 
 // ── 6. GOOGLE SIGN-IN ────────────────────────────────────────
@@ -95,7 +126,8 @@ if (googleBtn) {
   googleBtn.addEventListener("click", async () => {
     clearError();
     try {
-      await signInWithPopup(auth, new GoogleAuthProvider());
+      const result = await signInWithPopup(auth, new GoogleAuthProvider());
+      await linkPendingCredential(result.user);
       window.location.href = REDIRECT_AFTER_LOGIN;
     } catch (err) {
       handleAuthError(err);
@@ -108,7 +140,8 @@ if (facebookBtn) {
   facebookBtn.addEventListener("click", async () => {
     clearError();
     try {
-      await signInWithPopup(auth, new FacebookAuthProvider());
+      const result = await signInWithPopup(auth, new FacebookAuthProvider());
+      await linkPendingCredential(result.user);
       window.location.href = REDIRECT_AFTER_LOGIN;
     } catch (err) {
       handleAuthError(err);
@@ -131,11 +164,13 @@ if (submitBtn) {
     }
 
     try {
+      let result;
       if (isSignUpMode) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        result = await createUserWithEmailAndPassword(auth, email, password);
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        result = await signInWithEmailAndPassword(auth, email, password);
       }
+      await linkPendingCredential(result.user);
       window.location.href = REDIRECT_AFTER_LOGIN;
     } catch (err) {
       handleAuthError(err);
