@@ -154,6 +154,8 @@ if (signupLink) {
 // ── 10. REDIRECT ALREADY-LOGGED-IN USERS ────────────────────
 onAuthStateChanged(auth, (user) => {
   if (user) {
-    window.location.href = REDIRECT_AFTER_LOGIN;
+    // window.location.href = REDIRECT_AFTER_LOGIN; 
+    console.log('Logged In!!')
   }
+  console.log('user::', user)
 });
